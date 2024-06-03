@@ -118,18 +118,22 @@ class ODConv2d(nn.Module):
         # while we observe that when using the latter method the models will run faster with less gpu memory cost.
         channel_attention, filter_attention, spatial_attention, kernel_attention = self.attention(x)
         batch_size, in_planes, height, width = x.size()
-        x = x * channel_attention
-        x = x.reshape(1, -1, height, width)
-        aggregate_weight = spatial_attention * kernel_attention * self.weight.unsqueeze(dim=0)
-        aggregate_weight = torch.sum(aggregate_weight, dim=1).view(
-            [-1, self.in_planes // self.groups, self.kernel_size, self.kernel_size])
+        x = x * channel_attention              #将channel_attention与x逐元素相乘（会将channel_attention广播进行扩充的与x匹配）
+        x = x.reshape(1, -1, height, width)    #改变x的维度（1,B*C,h,w）
+        
+        #首先将权重 self.weight 的形状从 (kernel_num, out_planes, in_planes // groups, kernel_size, kernel_size) 扩展为 (1, kernel_num, out_planes, in_planes // groups, kernel_size, kernel_size)。
+        #然后，将 spatial_attention、kernel_attention 和权重逐元素相乘，得到聚合的权重 aggregate_weight。
+        aggregate_weight = spatial_attention * kernel_attention * self.weight.unsqueeze(dim=0)  
+        aggregate_weight = torch.sum(aggregate_weight, dim=1).view(               #沿 dim=1 维度对 aggregate_weight 求和
+            [-1, self.in_planes // self.groups, self.kernel_size, self.kernel_size])  #并重新形状为 [-1, self.in_planes // self.groups, self.kernel_size, self.kernel_size]，以适应卷积操作。
+        
         output = F.conv2d(x, weight=aggregate_weight, bias=None, stride=self.stride, padding=self.padding,
-                          dilation=self.dilation, groups=self.groups * batch_size)
+                          dilation=self.dilation, groups=self.groups * batch_size)       #这里是分组卷积，group=groups*batch_size
         output = output.view(batch_size, self.out_planes, output.size(-2), output.size(-1))
-        output = output * filter_attention
+        output = output * filter_attention     #该输出与filter_attention相乘，得到最后的结果
         return output
 
-    def _forward_impl_pw1x(self, x):
+    def _forward_impl_pw1x(self, x):   #这个类是上面的一种特殊情况，即卷积核大小是1X1时的输出。
         channel_attention, filter_attention, spatial_attention, kernel_attention = self.attention(x)
         x = x * channel_attention
         output = F.conv2d(x, weight=self.weight.squeeze(dim=0), bias=None, stride=self.stride, padding=self.padding,
